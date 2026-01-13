@@ -1,0 +1,75 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Person {
+  id           String           @id @default(uuid())
+  name         String
+  email        String?          @unique
+  gitUsername  String?
+  msId         String?          @unique
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  memberships  TeamMembership[]
+}
+
+model Team {
+  id          String           @id @default(uuid())
+  name        String
+  description String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  members     TeamMembership[]
+  projects    TeamProject[]
+}
+
+model TeamProject {
+  teamId      String
+  projectId   String
+  assignedAt  DateTime @default(now())
+  team        Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([teamId, projectId])
+}
+
+model TeamMembership {
+  personId  String
+  teamId    String
+  role      String?          @default("member")
+  createdAt DateTime         @default(now())
+  person    Person           @relation(fields: [personId], references: [id], onDelete: Cascade)
+  team      Team             @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@id([personId, teamId])
+}
+model Repository {
+  id        String    @id @default(uuid())
+  name      String
+  url       String
+  remoteUrl String?
+  type      String    // GITHUB, GITLAB, LOCAL
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  projects  Project[]
+}
+
+model Project {
+  id           String     @id @default(uuid())
+  name         String
+  path         String?
+  isSelected   Boolean    @default(true)
+  repositoryId String
+  repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  teams        TeamProject[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
