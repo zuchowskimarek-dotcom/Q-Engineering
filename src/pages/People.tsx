@@ -11,7 +11,7 @@ import { FiUserPlus, FiTrash2, FiEdit2, FiDownload, FiPlus } from 'react-icons/f
 import { gridTheme } from '../theme/gridTheme';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 
-const API_URL = 'http://localhost:3001/api';
+const API_URL = 'http://localhost:3003/api';
 
 export const People = () => {
     const [rowData, setRowData] = useState<any[]>([]);

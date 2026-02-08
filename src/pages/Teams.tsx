@@ -12,7 +12,7 @@ import { gridTheme } from '../theme/gridTheme';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { TreeView } from '../components/TreeView';
 
-const API_URL = 'http://localhost:3001/api';
+const API_URL = 'http://localhost:3003/api';
 
 interface Person {
     id: string;
@@ -255,7 +255,7 @@ export const Teams = () => {
                 <HStack spacing={1} h="full" align="center" wrap="wrap" overflowY="auto">
                     {params.data.projects?.map((tp: any) => (
                         <Tag key={tp.project.id} size="sm" borderRadius="full" variant="outline" colorScheme="blue">
-                            <TagLabel>{tp.project.repository.name} / {tp.project.name}</TagLabel>
+                            <TagLabel>{tp.project.repository.name}/{tp.project.name}</TagLabel>
                             <TagCloseButton onClick={(e) => { e.stopPropagation(); handleRemoveProject(tp.project.id, params.data.id); }} />
                         </Tag>
                     ))}
@@ -433,7 +433,7 @@ export const Teams = () => {
                                     {(!activeTeam?.projects || activeTeam?.projects?.length === 0) && <Text fontSize="xs" color="gray.500 italic">No projects assigned yet.</Text>}
                                     {activeTeam?.projects?.map((tp: any) => (
                                         <Tag key={tp.project.id} size="lg" borderRadius="full" variant="outline" colorScheme="blue">
-                                            <TagLabel>{tp.project.repository.name} / {tp.project.name}</TagLabel>
+                                            <TagLabel>{tp.project.repository.name}/{tp.project.name}</TagLabel>
                                             <TagCloseButton onClick={() => handleRemoveProject(tp.project.id)} />
                                         </Tag>
                                     ))}

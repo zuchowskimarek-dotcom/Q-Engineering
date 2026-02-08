@@ -1,7 +1,7 @@
 import { Box, Flex, VStack, Text, Icon, Link as ChakraLink, Heading } from '@chakra-ui/react';
 import { type ReactNode } from 'react';
 import { NavLink as RouterLink } from 'react-router-dom';
-import { FiHome, FiUsers, FiUser, FiFolder } from 'react-icons/fi';
+import { FiHome, FiUsers, FiUser, FiFolder, FiActivity } from 'react-icons/fi';
 
 interface SidebarItemProps {
     icon: any;
@@ -53,6 +53,7 @@ export const MainLayout = ({ children }: { children: ReactNode }) => {
                     <SidebarItem icon={FiUsers} to="/teams">Teams</SidebarItem>
                     <SidebarItem icon={FiUser} to="/people">People</SidebarItem>
                     <SidebarItem icon={FiFolder} to="/repositories">Repositories</SidebarItem>
+                    <SidebarItem icon={FiActivity} to="/metrics">Metrics</SidebarItem>
                 </VStack>
             </Box>
 

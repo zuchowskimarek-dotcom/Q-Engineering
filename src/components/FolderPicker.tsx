@@ -25,7 +25,7 @@ interface LsResponse {
     directories: DirectoryInfo[];
 }
 
-const API_URL = 'http://localhost:3001/api';
+const API_URL = 'http://localhost:3003/api';
 
 export const FolderPicker: React.FC<FolderPickerProps> = ({ isOpen, onClose, onSelect, initialPath }) => {
     const [currentPath, setCurrentPath] = useState(initialPath || '');

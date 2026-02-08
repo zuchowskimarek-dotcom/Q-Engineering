@@ -6,7 +6,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -19,6 +19,7 @@ model Person {
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
   memberships  TeamMembership[]
+  metrics      ProjectAuthorMetric[]
 }
 
 model Team {
@@ -52,14 +53,16 @@ model TeamMembership {
   @@id([personId, teamId])
 }
 model Repository {
-  id        String    @id @default(uuid())
-  name      String
-  url       String
-  remoteUrl String?
-  type      String    // GITHUB, GITLAB, LOCAL
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  projects  Project[]
+  id           String    @id @default(uuid())
+  name         String
+  url          String
+  remoteUrl    String?
+  type         String    // GITHUB, GITLAB, LOCAL
+  lastSyncedAt DateTime?
+  syncStatus   String?   // IDLE, SYNCING, ERROR
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  projects     Project[]
 }
 
 model Project {
@@ -70,6 +73,42 @@ model Project {
   repositoryId String
   repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
   teams        TeamProject[]
+  metrics      ProjectMetric[]
+  authorMetrics ProjectAuthorMetric[]
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
+}
+
+model ProjectMetric {
+  id           String   @id @default(uuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  linesOfCode  Int?
+  coverage     Float?
+  commitCount  Int?     // Total commits in the snapshot period
+  churn        Int?     // Total additions + deletions
+  
+  timestamp    DateTime @default(now())
+
+  @@index([projectId, timestamp])
+}
+
+model ProjectAuthorMetric {
+  id           String   @id @default(uuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  personId     String?
+  person       Person?  @relation(fields: [personId], references: [id], onDelete: SetNull)
+  
+  gitEmail     String
+  additions    Int      @default(0)
+  deletions    Int      @default(0)
+  commitCount  Int      @default(0)
+  
+  timestamp    DateTime @default(now())
+
+  @@index([projectId, timestamp])
+  @@index([gitEmail, timestamp])
 }

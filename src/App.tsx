@@ -6,6 +6,7 @@ import { Dashboard } from './pages/Dashboard';
 import { Repositories } from './pages/Repositories';
 import { People } from './pages/People';
 import { Teams } from './pages/Teams';
+import { Metrics } from './pages/Metrics';
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
             <Route path="/people" element={<People />} />
             <Route path="/teams" element={<Teams />} />
             <Route path="/repositories" element={<Repositories />} />
+            <Route path="/metrics" element={<Metrics />} />
           </Routes>
         </MainLayout>
       </BrowserRouter>

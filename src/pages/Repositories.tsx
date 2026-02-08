@@ -11,7 +11,7 @@ import { TreeView } from '../components/TreeView';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { FolderPicker } from '../components/FolderPicker';
 
-const API_URL = 'http://localhost:3001/api';
+const API_URL = 'http://localhost:3003/api';
 
 export const Repositories = () => {
     const [repositories, setRepositories] = useState<any[]>([]);
@@ -41,6 +41,17 @@ export const Repositories = () => {
     useEffect(() => {
         fetchRepos();
     }, [fetchRepos]);
+
+    // Background polling while syncing
+    useEffect(() => {
+        const isSyncing = repositories.some(r => r.syncStatus === 'SYNCING');
+        if (isSyncing) {
+            const interval = setInterval(() => {
+                fetchRepos();
+            }, 3000);
+            return () => clearInterval(interval);
+        }
+    }, [repositories, fetchRepos]);
 
     // Handle real-time detection
     const detectRepo = async (path: string) => {
@@ -131,14 +142,28 @@ export const Repositories = () => {
         }
     };
 
-    const handleDiscover = async (id: string) => {
+    const handleDiscover = async (repoId: string) => {
         try {
-            const res = await fetch(`${API_URL}/repositories/${id}/discover`, { method: 'POST' });
+            const res = await fetch(`${API_URL}/repositories/${repoId}/discover`, { method: 'POST' });
             if (!res.ok) throw new Error();
-            toast({ title: 'Subprojects discovered', status: 'success' });
             fetchRepos();
+            toast({ title: 'Directory scan complete', status: 'success' });
         } catch (error) {
             toast({ title: 'Discovery failed', status: 'error' });
+        }
+    };
+
+    const handleSync = async (repoId: string) => {
+        try {
+            const res = await fetch(`${API_URL}/repositories/${repoId}/sync`, { method: 'POST' });
+            if (!res.ok) throw new Error();
+
+            // Optimistic status update
+            setRepositories(prev => prev.map(r => r.id === repoId ? { ...r, syncStatus: 'SYNCING' } : r));
+
+            toast({ title: 'Sync started', description: 'Metrics are being calculated in background', status: 'info' });
+        } catch (error) {
+            toast({ title: 'Sync failed to start', status: 'error' });
         }
     };
 
@@ -215,6 +240,7 @@ export const Repositories = () => {
                         onOpen();
                     }}
                     onDiscover={handleDiscover}
+                    onSync={handleSync}
                 />
             </Box>
 

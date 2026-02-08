@@ -1,0 +1,83 @@
+import json
+import urllib.request
+import base64
+
+GRAFANA_URL = "http://localhost:3000"
+USER = "admin"
+PASS = "admin"
+DASHBOARD_UID = "project-metrics"
+
+def update_dashboard():
+    auth = base64.b64encode(f"{USER}:{PASS}".encode()).decode()
+    headers = {
+        "Authorization": f"Basic {auth}",
+        "Content-Type": "application/json"
+    }
+
+    # 1. Get dashboard
+    req = urllib.request.Request(f"{GRAFANA_URL}/api/dashboards/uid/{DASHBOARD_UID}", headers=headers)
+    with urllib.request.urlopen(req) as r:
+        dashboard_data = json.loads(r.read())
+        dashboard = dashboard_data["dashboard"]
+
+    # 2. SQL Templates - Robust Filtering
+    # We filter by Project Name (from dropdown) and Team ID (from dropdown)
+    # We use a subquery for Team filtering to avoid row multiplication
+    filter_clause = """
+    AND (p.name IN ($project) OR '$project' = 'all')
+    AND p.id IN (
+        SELECT tp."projectId" 
+        FROM "TeamProject" tp
+        WHERE (tp."teamId" IN ($team) OR '$team' = 'all')
+    )
+    """.strip()
+
+    loc_sql = f'SELECT m.timestamp as time, m."linesOfCode" as value, p.name as metric FROM "ProjectMetric" m JOIN "Project" p ON m."projectId" = p.id WHERE $__timeFilter(m.timestamp) {filter_clause} ORDER BY m.timestamp ASC'
+    commit_sql = f'SELECT m.timestamp as time, m."commitCount" as value, p.name as metric FROM "ProjectMetric" m JOIN "Project" p ON m."projectId" = p.id WHERE $__timeFilter(m.timestamp) {filter_clause} ORDER BY m.timestamp ASC'
+    
+    churn_sql = f"""
+SELECT
+  $__timeGroupAlias(timestamp,$__interval),
+  p.name AS metric,
+  SUM(m.churn) AS "churn"
+FROM "ProjectMetric" m
+JOIN "Project" p ON m."projectId" = p.id
+WHERE $__timeFilter(timestamp) {filter_clause}
+GROUP BY 1, 2
+ORDER BY 1, 2
+""".strip()
+
+    coverage_sql = f"""
+SELECT
+  $__timeGroupAlias(timestamp,$__interval),
+  p.name AS metric,
+  AVG(m.coverage) AS "coverage"
+FROM "ProjectMetric" m
+JOIN "Project" p ON m."projectId" = p.id
+WHERE $__timeFilter(timestamp) {filter_clause} AND m.coverage IS NOT NULL
+GROUP BY 1, 2
+ORDER BY 1, 2
+""".strip()
+
+    for panel in dashboard.get("panels", []):
+        if panel["title"] == "Lines of Code over Time (Contextual)":
+            panel["targets"][0]["rawSql"] = loc_sql
+        elif panel["title"] == "Commit Count over Time (Contextual)":
+            panel["targets"][0]["rawSql"] = commit_sql
+        elif panel["title"] == "Code Churn over Time":
+            panel["targets"][0]["rawSql"] = churn_sql
+        elif panel["title"] == "Method Coverage (Defined Unit Tests)":
+            panel["targets"][0]["rawSql"] = coverage_sql
+
+    # 3. Save back
+    payload = json.dumps({
+        "dashboard": dashboard,
+        "overwrite": True
+    }).encode()
+    
+    req = urllib.request.Request(f"{GRAFANA_URL}/api/dashboards/db", data=payload, headers=headers, method="POST")
+    with urllib.request.urlopen(req) as r:
+        print(f"Status: {r.status}, Response: {r.read().decode()}")
+
+if __name__ == "__main__":
+    update_dashboard()

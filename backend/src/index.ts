@@ -6,11 +6,13 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { execSync } from 'child_process';
+import cron from 'node-cron';
+import { ScannerService } from './services/ScannerService';
 // Utility to get all files in a directory recursively
 
 const prisma = new PrismaClient();
 const app = express();
-const port = process.env.PORT || 3001;
+const port = process.env.PORT || 3002;
 
 app.use(cors());
 app.use(bodyParser.json());
@@ -183,6 +185,7 @@ app.delete('/api/people/:id', async (req, res) => {
     res.json({ success: true });
 });
 
+
 // --- Team Endpoints ---
 
 // Get all teams
@@ -274,11 +277,46 @@ app.delete('/api/memberships/:personId/:teamId', async (req, res) => {
 });
 
 // Helper to detect repo type and remote URL from .git/config (searches upwards)
-const detectRepoInfo = (repoPath: string): { type: string, remoteUrl: string | null, gitRoot: string | null } => {
-    let currentPath = repoPath;
+const detectRepoInfo = (repoPath: string): { type: string, remoteUrl: string | null, gitRoot: string | null, isGroup?: boolean, nestedRepoCount?: number } => {
+    // STEP 1: Check if the path itself has a .git directory
+    const directGitPath = path.join(repoPath, '.git', 'config');
+    if (fs.existsSync(directGitPath)) {
+        // This is a direct git repo
+        try {
+            const config = fs.readFileSync(directGitPath, 'utf8');
+            const urlMatch = config.match(/url\s*=\s*([^\n\r]+)/);
+            const remoteUrl = urlMatch ? urlMatch[1].trim() : null;
+
+            let type = 'LOCAL';
+            if (remoteUrl) {
+                const lowerUrl = remoteUrl.toLowerCase();
+                if (lowerUrl.includes('github.com')) type = 'GITHUB';
+                else if (lowerUrl.includes('gitlab')) type = 'GITLAB';
+            }
+            return { type, remoteUrl, gitRoot: repoPath };
+        } catch (e) {
+            console.error('Error reading .git/config:', e);
+        }
+    }
+
+    // STEP 2: Check if this is a multi-repo directory (contains nested git repos)
+    const nestedRepos = findGitReposInDirectory(repoPath, 3); // Limit depth to 3 for performance
+    if (nestedRepos.length > 0) {
+        // It's a multi-repo group directory
+        const firstRepoInfo = nestedRepos[0];
+        return {
+            type: firstRepoInfo.type || 'GROUP',
+            remoteUrl: firstRepoInfo.remoteUrl,
+            gitRoot: null,
+            isGroup: true,
+            nestedRepoCount: nestedRepos.length
+        };
+    }
+
+    // STEP 3: Search upwards for .git directory (for subdirectories of a repo)
+    let currentPath = path.dirname(repoPath);
     let gitRoot: string | null = null;
 
-    // Search upwards for .git directory
     while (currentPath !== path.parse(currentPath).root) {
         const configPath = path.join(currentPath, '.git', 'config');
         if (fs.existsSync(configPath)) {
@@ -288,7 +326,10 @@ const detectRepoInfo = (repoPath: string): { type: string, remoteUrl: string | n
         currentPath = path.dirname(currentPath);
     }
 
-    if (!gitRoot) return { type: 'LOCAL', remoteUrl: null, gitRoot: null };
+    if (!gitRoot) {
+        return { type: 'LOCAL', remoteUrl: null, gitRoot: null };
+    }
+
 
     try {
         const config = fs.readFileSync(path.join(gitRoot, '.git', 'config'), 'utf8');
@@ -329,6 +370,59 @@ const detectRepoInfo = (repoPath: string): { type: string, remoteUrl: string | n
     return { type: 'LOCAL', remoteUrl: null, gitRoot };
 };
 
+// Helper to find all git repos within a directory (with depth limit)
+const findGitReposInDirectory = (dir: string, maxDepth: number = 5, currentDepth: number = 0): Array<{ path: string, name: string, remoteUrl: string | null, type: string }> => {
+    if (currentDepth >= maxDepth) return [];
+
+    const results: Array<{ path: string, name: string, remoteUrl: string | null, type: string }> = [];
+
+    try {
+        const items = fs.readdirSync(dir, { withFileTypes: true });
+
+        for (const item of items) {
+            if (!item.isDirectory()) continue;
+            if (['node_modules', '.git', 'dist', 'build', 'coverage', '.idea', '.vscode'].includes(item.name)) continue;
+
+            const fullPath = path.join(dir, item.name);
+            const gitConfigPath = path.join(fullPath, '.git', 'config');
+
+            if (fs.existsSync(gitConfigPath)) {
+                // Found a git repo
+                let remoteUrl: string | null = null;
+                let type = 'LOCAL';
+
+                try {
+                    const config = fs.readFileSync(gitConfigPath, 'utf8');
+                    const urlMatch = config.match(/url\s*=\s*([^\n\r]+)/);
+                    remoteUrl = urlMatch ? urlMatch[1].trim() : null;
+
+                    if (remoteUrl) {
+                        const lowerUrl = remoteUrl.toLowerCase();
+                        if (lowerUrl.includes('github.com')) type = 'GITHUB';
+                        else if (lowerUrl.includes('gitlab')) type = 'GITLAB';
+                    }
+                } catch (e) {
+                    // ignore
+                }
+
+                results.push({
+                    path: fullPath,
+                    name: item.name,
+                    remoteUrl,
+                    type
+                });
+            } else {
+                // Recurse into subdirectory
+                results.push(...findGitReposInDirectory(fullPath, maxDepth, currentDepth + 1));
+            }
+        }
+    } catch (e) {
+        // Access denied or other fs errors
+    }
+
+    return results;
+};
+
 // Endpoint to detect repository info before saving
 app.get('/api/fs/detect-repo', (req, res) => {
     const repoPath = req.query.path as string;
@@ -338,6 +432,27 @@ app.get('/api/fs/detect-repo', (req, res) => {
 
     const info = detectRepoInfo(repoPath);
     res.json(info);
+});
+
+// Endpoint to detect all nested git repositories in a directory
+app.get('/api/fs/detect-multi-repo', (req, res) => {
+    const dirPath = req.query.path as string;
+    const maxDepth = parseInt(req.query.depth as string) || 5;
+
+    if (!dirPath || !fs.existsSync(dirPath)) {
+        return res.status(404).json({ error: 'Path not found' });
+    }
+
+    const repos = findGitReposInDirectory(dirPath, maxDepth);
+    res.json({
+        basePath: dirPath,
+        isGroup: repos.length > 0,
+        repoCount: repos.length,
+        repos: repos.map(r => ({
+            ...r,
+            relativePath: path.relative(dirPath, r.path)
+        }))
+    });
 });
 
 // Get all repositories with projects
@@ -388,7 +503,7 @@ app.post('/api/repositories', async (req, res) => {
 });
 
 // Helper for discovery
-const findProjects = (dir: string, repoId: string, rootDir: string): any[] => {
+const findProjects = (dir: string, repoId: string, rootDir: string, repoName: string): any[] => {
     let results: any[] = [];
     try {
         const items = fs.readdirSync(dir, { withFileTypes: true });
@@ -408,14 +523,14 @@ const findProjects = (dir: string, repoId: string, rootDir: string): any[] => {
                 // Let's store simple name for now, but handle path.
 
                 results.push({
-                    name: name,
+                    name: path.relative(rootDir, fullPath),
                     path: fullPath,
-                    isSelected: true,
+                    isSelected: false,
                     repositoryId: repoId
                 });
 
                 // Recurse
-                results = results.concat(findProjects(fullPath, repoId, rootDir));
+                results = results.concat(findProjects(fullPath, repoId, rootDir, repoName));
             }
         }
     } catch (e) {
@@ -426,8 +541,11 @@ const findProjects = (dir: string, repoId: string, rootDir: string): any[] => {
 
 const runDiscovery = async (repoId: string, repoPath: string) => {
     try {
+        const repo = await prisma.repository.findUnique({ where: { id: repoId } });
+        if (!repo) return;
+
         // Recursive scan
-        const subdirs = findProjects(repoPath, repoId, repoPath);
+        const subdirs = findProjects(repoPath, repoId, repoPath, repo.name);
 
         // Clear and recreate
         await prisma.project.deleteMany({ where: { repositoryId: repoId } });
@@ -601,6 +719,251 @@ app.get('/api/import/git-authors', async (req, res) => {
         res.status(500).json({ error: 'Failed to scan repositories' });
     }
 });
+// --- Contextual Metrics UI Helpers ---
+
+app.get('/api/metrics/members', async (req, res) => {
+    const { teamIds } = req.query;
+    try {
+        if (!teamIds || teamIds === 'all' || teamIds === '') {
+            const people = await prisma.person.findMany({ orderBy: { name: 'asc' } });
+            return res.json(people);
+        }
+
+        const teamIdArray = (teamIds as string).split(',');
+        const memberships = await prisma.teamMembership.findMany({
+            where: { teamId: { in: teamIdArray } },
+            include: { person: true },
+            orderBy: { person: { name: 'asc' } }
+        });
+
+        // Unique people across teams
+        const uniquePeople = Array.from(new Map(memberships.map(m => [m.person.id, m.person])).values());
+        res.json(uniquePeople);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch members' });
+    }
+});
+
+app.get('/api/metrics/projects', async (req, res) => {
+    const { teamIds, memberIds } = req.query;
+    try {
+        const whereClause: any = { isSelected: true };
+        const teamIdArray = teamIds && teamIds !== 'all' ? (teamIds as string).split(',').filter(Boolean) : [];
+        const memberIdArray = memberIds && memberIds !== 'all' ? (memberIds as string).split(',').filter(Boolean) : [];
+
+        if (teamIdArray.length > 0 && memberIdArray.length > 0) {
+            // Intersection: Projects in selected Teams AND linked to selected Members
+            whereClause.teams = {
+                some: {
+                    teamId: { in: teamIdArray },
+                    team: {
+                        members: {
+                            some: { personId: { in: memberIdArray } }
+                        }
+                    }
+                }
+            };
+        } else if (teamIdArray.length > 0) {
+            // Selected Teams only
+            whereClause.teams = {
+                some: { teamId: { in: teamIdArray } }
+            };
+        } else if (memberIdArray.length > 0) {
+            // Selected Members only
+            whereClause.teams = {
+                some: {
+                    team: {
+                        members: {
+                            some: { personId: { in: memberIdArray } }
+                        }
+                    }
+                }
+            };
+        }
+
+        const projects = await prisma.project.findMany({
+            where: whereClause,
+            orderBy: { name: 'asc' }
+        });
+        res.json(projects);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch projects' });
+    }
+});
+
+// --- Sync & Metrics Endpoints ---
+
+
+const syncRepository = async (repoId: string, since: string = "24 hours ago") => {
+    console.log(`[Sync Engine] Starting sync for repo: ${repoId}`);
+    const repo = await prisma.repository.findUnique({
+        where: { id: repoId },
+        include: {
+            projects: true // Sync ALL projects - team filtering happens on read, not sync
+        }
+    });
+
+    console.log(`[Sync Engine] Found repo: ${repo?.name}, projects with teams: ${repo?.projects?.length || 0}`);
+    if (repo?.projects) {
+        console.log(`[Sync Engine] Project paths:`, repo.projects.map(p => p.path));
+    }
+
+    if (!repo || !repo.url) return;
+
+    await prisma.repository.update({
+        where: { id: repoId },
+        data: { syncStatus: 'SYNCING' }
+    });
+
+    try {
+        // --- Git Update Phase ---
+        console.log(`[Sync Engine] Updating local files for: ${repo.name}`);
+        try {
+            const scriptPath = path.join(repo.url, 'clone_repos.sh');
+            if (fs.existsSync(scriptPath)) {
+                console.log(`[Sync Engine] Running clone_repos.sh in ${repo.url}...`);
+                execSync(`./clone_repos.sh`, {
+                    cwd: repo.url,
+                    stdio: 'inherit',
+                    shell: '/bin/bash'
+                });
+            } else {
+                console.log(`[Sync Engine] No clone_repos.sh found, trying git pull...`);
+                execSync(`git pull`, { cwd: repo.url, stdio: 'inherit' });
+            }
+        } catch (updateErr: any) {
+            console.error(`[Sync Engine] Git update phase failed for ${repo.name}:`, updateErr.message);
+        }
+
+        // --- Scanning Phase ---
+        // Global Scan (Repo-First Approach)
+        const repoData = await ScannerService.scanFullRepository(repo.url, repo.type === 'GITLAB' ? (repo.remoteUrl ?? undefined) : undefined, since);
+
+        for (const project of repo.projects) {
+            if (!project.path) continue;
+
+            console.log(`[Sync Engine] Slicing metrics for: ${project.name}`);
+            // Calculate relative path from repo root for slicing
+            const relPath = path.relative(repo.url, project.path);
+            const metrics = ScannerService.sliceMetricsForPath(repoData, relPath, repo.url);
+
+            await prisma.projectMetric.create({
+                data: {
+                    projectId: project.id,
+                    linesOfCode: metrics.linesOfCode,
+                    commitCount: metrics.commitCount,
+                    churn: metrics.churn,
+                    coverage: metrics.coverage
+                }
+            });
+
+            // Save per-author metrics
+            for (const author of metrics.authors) {
+                // Try to find a person with this email (might be many if semicolon separated in Git log match)
+                // For now, assume git log --format="AUTHOR:%aE" gives one email correctly.
+                const person = await prisma.person.findFirst({
+                    where: {
+                        email: { equals: author.gitEmail, mode: 'insensitive' }
+                    }
+                });
+
+                await prisma.projectAuthorMetric.create({
+                    data: {
+                        projectId: project.id,
+                        personId: person?.id || null,
+                        gitEmail: author.gitEmail,
+                        additions: author.additions,
+                        deletions: author.deletions,
+                        commitCount: author.commitCount
+                    }
+                });
+            }
+        }
+
+        await prisma.repository.update({
+            where: { id: repoId },
+            data: {
+                syncStatus: 'IDLE',
+                lastSyncedAt: new Date()
+            }
+        });
+        console.log(`[Sync Engine] Sync completed for repo: ${repoId}`);
+    } catch (error) {
+        console.error(`[Sync Engine] Sync failed for repo ${repoId}:`, error);
+        await prisma.repository.update({
+            where: { id: repoId },
+            data: { syncStatus: 'ERROR' }
+        });
+    }
+};
+
+app.post('/api/repositories/:id/sync', async (req, res) => {
+    const { id } = req.params;
+    const { since } = req.query;
+
+    const repo = await prisma.repository.findUnique({ where: { id } });
+    if (!repo) return res.status(404).json({ error: 'Repository not found' });
+
+    // Run in background
+    syncRepository(id, typeof since === 'string' ? since : undefined);
+
+    res.json({ message: 'Sync started' });
+});
+
+// Debug: Test which projects with teams are found for sync
+app.get('/api/repositories/:id/debug-sync', async (req, res) => {
+    const { id } = req.params;
+    const repo = await prisma.repository.findUnique({
+        where: { id },
+        include: {
+            projects: {
+                where: {
+                    teams: { some: {} }
+                },
+                include: {
+                    teams: { include: { team: true } }
+                }
+            }
+        }
+    });
+
+    if (!repo) return res.status(404).json({ error: 'Repository not found' });
+
+    res.json({
+        repoName: repo.name,
+        repoUrl: repo.url,
+        projectsWithTeamsCount: repo.projects.length,
+        projects: repo.projects.map(p => ({
+            name: p.name,
+            path: p.path,
+            teams: p.teams.map(t => t.team.name)
+        }))
+    });
+});
+
+// Get historical metrics for a project
+app.get('/api/projects/:id/metrics', async (req, res) => {
+    const { id } = req.params;
+    const metrics = await prisma.projectMetric.findMany({
+        where: { projectId: id },
+        orderBy: { timestamp: 'asc' },
+        take: 30 // Last 30 snapshots
+    });
+    res.json(metrics);
+});
+
+// --- Scheduled Tasks ---
+
+// Daily sync at 2 AM
+cron.schedule('0 2 * * *', async () => {
+    console.log('[Scheduler] Running daily repository sync...');
+    const repos = await prisma.repository.findMany();
+    for (const repo of repos) {
+        await syncRepository(repo.id);
+    }
+});
+
+// --- Server Start ---
 
 app.listen(port, () => {
     console.log(`Backend listening at http://localhost:${port}`);

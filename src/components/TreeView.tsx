@@ -7,9 +7,10 @@ import {
     Text,
     VStack,
     useDisclosure,
+    Spinner,
     Checkbox,
 } from '@chakra-ui/react';
-import { FiChevronRight, FiChevronDown, FiFolder, FiPackage, FiGithub, FiGitlab, FiHardDrive, FiTrash2, FiRefreshCw, FiEdit2 } from 'react-icons/fi';
+import { FiChevronRight, FiChevronDown, FiFolder, FiPackage, FiGithub, FiGitlab, FiHardDrive, FiTrash2, FiRefreshCw, FiEdit2, FiSearch } from 'react-icons/fi';
 import { useMemo, memo, createContext, useContext } from 'react';
 
 interface Project {
@@ -26,6 +27,8 @@ interface Repository {
     remoteUrl?: string | null;
     type: string;
     projects: Project[];
+    syncStatus?: 'IDLE' | 'SYNCING' | 'ERROR';
+    lastSyncedAt?: string | null;
 }
 
 interface TreeViewProps {
@@ -34,6 +37,7 @@ interface TreeViewProps {
     onDeleteRepo?: (repoId: string) => void;
     onEditRepo?: (repo: Repository) => void;
     onDiscover?: (repoId: string) => void;
+    onSync?: (repoId: string) => void;
     selectionMode?: boolean;
     onSelectProject?: (projectId: string, projectName: string) => void;
     selectedProjectId?: string;
@@ -183,7 +187,7 @@ const FileNode = memo(({ node, depth, onSelect, selectedId, selectionMode }: any
     );
 });
 
-const RepoNode = memo(({ repo, onDeleteRepo, onEditRepo, onDiscover, selectionMode, onSelectProject, selectedProjectId }: any) => {
+const RepoNode = memo(({ repo, onDeleteRepo, onEditRepo, onDiscover, onSync, selectionMode, onSelectProject, selectedProjectId }: any) => {
     const { isOpen, onToggle } = useDisclosure();
     const { selectedIds, toggleProject } = useContext(SelectionContext);
 
@@ -215,32 +219,39 @@ const RepoNode = memo(({ repo, onDeleteRepo, onEditRepo, onDiscover, selectionMo
                     {!selectionMode && <Text fontSize="xs" color="gray.500">{repo.url}</Text>}
                 </VStack>
 
-                {!selectionMode && (
-                    <HStack spacing={1}>
-                        <IconButton
-                            aria-label="Edit"
-                            icon={<FiEdit2 />}
-                            size="sm"
-                            variant="ghost"
-                            onClick={(e) => { e.stopPropagation(); onEditRepo(repo); }}
-                        />
-                        <IconButton
-                            aria-label="Discover"
-                            icon={<FiRefreshCw />}
-                            size="sm"
-                            variant="ghost"
-                            onClick={(e) => { e.stopPropagation(); onDiscover(repo.id); }}
-                        />
-                        <IconButton
-                            aria-label="Delete"
-                            icon={<FiTrash2 />}
-                            size="sm"
-                            variant="ghost"
-                            colorScheme="red"
-                            onClick={(e) => { e.stopPropagation(); onDeleteRepo(repo.id); }}
-                        />
-                    </HStack>
-                )}
+                <HStack spacing={1}>
+                    <IconButton
+                        aria-label="Edit"
+                        icon={<FiEdit2 />}
+                        size="sm"
+                        variant="ghost"
+                        onClick={(e) => { e.stopPropagation(); onEditRepo(repo); }}
+                    />
+                    <IconButton
+                        aria-label="Sync"
+                        icon={repo.syncStatus === 'SYNCING' ? <Spinner size="xs" /> : <FiRefreshCw />}
+                        size="sm"
+                        variant="ghost"
+                        colorScheme={repo.syncStatus === 'ERROR' ? 'red' : 'brand'}
+                        isDisabled={repo.syncStatus === 'SYNCING'}
+                        onClick={(e) => { e.stopPropagation(); onSync && onSync(repo.id); }}
+                    />
+                    <IconButton
+                        aria-label="Discover"
+                        icon={<FiSearch />}
+                        size="sm"
+                        variant="ghost"
+                        onClick={(e) => { e.stopPropagation(); onDiscover(repo.id); }}
+                    />
+                    <IconButton
+                        aria-label="Delete"
+                        icon={<FiTrash2 />}
+                        size="sm"
+                        variant="ghost"
+                        colorScheme="red"
+                        onClick={(e) => { e.stopPropagation(); onDeleteRepo(repo.id); }}
+                    />
+                </HStack>
             </HStack>
 
             <Collapse in={isOpen} animateOpacity>
