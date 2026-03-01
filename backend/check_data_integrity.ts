@@ -14,7 +14,7 @@ async function checkIntegrity() {
             where: {
                 teams: { some: {} }
             }
-        });
+        });//
 
         const orphans = totalProjects - projectsWithTeams;
 
